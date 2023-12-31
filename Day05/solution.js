@@ -22,6 +22,8 @@ class Mapping {
         this.dest = dest;
         this.src = src;
         this.len = len;
+        this.delta = dest - src;
+        this.dist = src + this.delta;
     }
 
     maps_to(num) {
@@ -49,6 +51,7 @@ async function main(args) {
     }
 
     let maps = {};
+    let seeds = [];
 
     {
         let section = '';
@@ -62,7 +65,7 @@ async function main(args) {
             }
             switch (firstWord) {
                 case 'seeds:':
-                    maps.seeds = words.slice(1).map(n => Number(n));
+                    seeds = words.slice(1).map(n => Number(n));
                     break;
                 case '':
                     continue;
@@ -98,97 +101,86 @@ async function main(args) {
         return steps;
     }
 
-    const paths = maps.seeds.map(s => pathfind(s));
+    const paths = seeds.map(s => pathfind(s));
     const locations = paths.map(p => p[p.length - 1]);
 
     console.log(`Lowest location: ${Math.min(...locations)}`);
 
-    maps.seed_pairs = []
-    for (const n of Array(maps.seeds.length / 2).keys()) {
-        maps.seed_pairs.push([maps.seeds[n], maps.seeds[n + 1]]);
+    let seed_pairs = [];
+    for (const n of Array(seeds.length / 2).keys()) {
+        seed_pairs.push([seeds[n * 2], seeds[n * 2 + 1]]);
     }
 
-    function fill_in_the_blanks(theMaps) {
+    function fill_in_the_blanks(theMaps, upper_bound = 0) {
         theMaps.sort((a, b) => a.src - b.src);
+
         let lower_bound = 0;
-        let mapped_ranges = [];
-        let unmapped_ranges = [];
+        let maps_new = [];
 
         for (const m of theMaps) {
             if (lower_bound < m.src) {
-                unmapped_ranges.push([lower_bound, m.src]);
-                mapped_ranges.push([m.src, m.upper_src_bound()]);
+                const m_new = new Mapping(
+                    lower_bound, lower_bound, m.src - lower_bound);
+                maps_new.push(m_new);
+                maps_new.push(m);
                 lower_bound = m.upper_src_bound();
-            } else if (m.src == lower_bound) {
-                const last_idx = mapped_ranges.length - 1;
-                const last_range = mapped_ranges[last_idx];
-                if (last_range && last_range[1] == m.src) {
-                    mapped_ranges[last_idx] = (
-                        [last_range[0], m.upper_src_bound()]);
-                    lower_bound = m.upper_src_bound();
-                } else {
-                    mapped_ranges.push([m.src, m.upper_src_bound()]);
-                    lower_bound = m.upper_src_bound();
-                }
-            } else {
-                error("something weird happened");
+            } else if (m.src === lower_bound) {
+                maps_new.push(m)
+                lower_bound = m.upper_src_bound();
             }
         }
 
-        for (const r of unmapped_ranges) {
-            theMaps.push(new Mapping(r[0], r[0], r[1] - r[0]));
+        const last_map = maps_new[maps_new.length - 1]
+        if (upper_bound > last_map.upper_src_bound()) {
+            const last_upper = last_map.upper_src_bound();
+            const m_new = new Mapping(
+                last_upper, last_upper, upper_bound - last_upper);
+            maps_new.push(m_new);
         }
-        return theMaps;
+
+        return maps_new;
     }
 
-    function reduce_map(m_ab, list_m_bc) {
+    function reduce_maps(m_ab, list_m_bc) {
         // m_ab : mapping from a -> b (bounded)
-        // list_m_bc : list of (bounded) mappings from b -> c
+        // list_m_bc : list of (bounded) mappings from b -> c. must be sorted
+        //             by src value in ascending order.
         //
         // returns: list of mappings from a -> c, equivalent to the results of
         //          evaluating a -> b -> c.
-        list_m_bc.sort((b, c) => b.src - c.src);
-        const last_m_bc = list_m_bc[list_m_bc.length - 1];
-        if (m_ab.upper_dest_bound() > last_m_bc.upper_src_bound()) {
-            const src = m_ab.upper_dest_bound();
-            const len = src;
-            list_m_bc.push(new Mapping(src, dest, len));
-        }
-    
-
+        //
         let new_mappings = [];
-        const lower_to = m_from.dest;
-        const upper_to = m_from.upper_dest_bound();
-        const lower_from = m_from.src;
-        const upper_from = m_from.upper_src_bound();
+        const lower_a = m_ab.src;
+        const upper_a = m_ab.upper_src_bound();
+        const lower_b = m_ab.dest;
+        const upper_b = m_ab.upper_dest_bound();
 
-        console.log('---');
-        console.log(m_from);
-        console.log(upper_to);
-        console.log('\n');
-        for (const [idx, m_to] of ms_to.entries()) {
-            console.log(m_to);
-            if (lower_to < m_to.src) { 
-                const m_to_prev = ms_to[idx - 1];
-                if (upper_to < m_to.src) {
-                    console.log('upper_to < m_to.src');
-                    const new_dest = m_to_prev.maps_to(m_from.dest);
+        // console.log(m_ab);
+        // console.log('\n');
+        for (const [idx, m_bc] of list_m_bc.entries()) {
+            // console.log(m_bc);
+            if (lower_b < m_bc.upper_src_bound()) { 
+                if (upper_b <= m_bc.upper_src_bound()) {
+                    // console.log('upper_b <= m_bc.upper_src_bound');
+                    const new_dest = m_bc.maps_to(lower_b);
                     new_mappings.push(
-                        new Mapping(m_from.src, new_dest, m_from.len));
-                } else if (upper_to === m_to.src) {
-                    // idk man;
-                } else {
-                    console.log('upper_to >= m_to.src');
-                    const remaining_len = upper_to - m_to.src;
-                    const remaining_src = upper_from - remaining_len;
+                        new Mapping(new_dest, lower_a, m_ab.len));
+                }
+                else {
+                    // console.log('upper_b > m_bc.upper_src_bound');
+                    const remain_len = upper_b - m_bc.upper_src_bound();
+                    const remain_src = upper_a - remain_len;
+                    const remain_dest = m_ab.maps_to(remain_src);
                     const remainder = (
-                        new Mapping(remaining_src, m_to.src, remaining_len));
-                    new_mappings.push(...reduce_map(remainder, ms_to));
+                        new Mapping(remain_dest, remain_src, remain_len));
 
-                    const new_dest = m_to.maps_to(m_to.src);
-                    const new_len = m_from.len - remaining_len;
+                    const new_dest = m_bc.maps_to(lower_b);
+                    const new_len = m_ab.len - remain_len;
+
                     new_mappings.push(
-                        new Mapping(m_from.src, new_dest, new_len));
+                        new Mapping(new_dest, lower_a, new_len));
+                    new_mappings.push(
+                        ...reduce_maps(remainder, list_m_bc.slice(idx + 1)));
                 }
                 break;
             }
@@ -196,11 +188,51 @@ async function main(args) {
         return new_mappings;
     }
 
-    const m = maps['seed-to-soil'][0];
-    const ms = fill_in_the_blanks(maps['water-to-light'])
-    console.log(ms);
-    //console.log(reduce_map(m, ms));
+    let flattened = [];
+    const map_types = Object.keys(maps)
+    const last_idx = map_types.length - 1;
 
+    for (const [idx, k] of map_types.entries()) {
+        let current_maps = maps[k];
+        if (idx === 0) {
+            flattened = fill_in_the_blanks(current_maps);
+        } else {
+            let new_flattened = [];
+            current_maps.sort((x, y) => x.src - y.src);
+            const last_map = flattened[flattened.length - 1];
+            current_maps = fill_in_the_blanks(current_maps,
+                                              last_map.upper_src_bound());
+            for (const m of flattened) {
+                new_flattened.push(...reduce_maps(m, current_maps));
+            }
+            flattened = new_flattened;
+        }
+    }
+    
+    flattened.sort((x, y) => x.dist - y.dist);
+    let location_of_lowest = -1;
+    for (const mapping of flattened) {
+        let found = false;
+        for (const [start, len] of seed_pairs) {
+            if (mapping.src < (start + len) && mapping.src >= start) {
+                found = true;
+                console.log(`first: ${mapping.dest}`);
+                console.log(mapping);
+                location_of_lowest = mapping.dest;
+            } else if (mapping.upper_src_bound() > start
+                       && mapping.upper_src_bound() <= (start + len)) {
+                found = true;
+                console.log(`second: ${mapping.maps_to(start)}`);
+                console.log(mapping);
+                location_of_lowest = mapping.maps_to(start);
+            }
+        }
+        if (found) {
+            break;
+        }
+    }
+
+    console.log(`Lowest possible location: ${location_of_lowest}`);
     process.exit(0);
 }
 
